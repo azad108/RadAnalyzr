@@ -6,13 +6,12 @@ import "./Form.css"
 import * as xlsx from 'xlsx';
 import fs from "fs";
 
-
 export default function Form({ addTodo }) {
-  const [text, setText] = useState("");
+  const [transcript, setTranscript] = useState("");
   const [radData, setRadData] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  const loadData =  (e) => {
+  const loadData = (e) => {
     const reader = new FileReader()
     const fileInput = document.getElementById("file-input");
     const file = fileInput.files[0];
@@ -23,11 +22,9 @@ export default function Form({ addTodo }) {
         reader.onload = (evt) => {
             const data = new Uint8Array(evt.target.result);
             const workbook = xlsx.read(data, {type: "array"});
-            console.log (workbook)
             const sheetName = workbook.SheetNames[0];
             const sheet = workbook.Sheets[sheetName];
             const parsedData = xlsx.utils.sheet_to_json(sheet, {header: 1});
-            console.log(parsedData)
             setRadData(parsedData);
         };
     }   
@@ -39,12 +36,36 @@ export default function Form({ addTodo }) {
   }
 
   const handleChange = (evt) => {
-    setText(evt.target.value);
+    setTranscript(evt.target.value);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log(radData);
+    if (transcript.length > 0) {
+        let dict = {}
+        let temp = JSON.parse(JSON.stringify(radData));
+        for (let i = 1; i < temp.length; ++i) {
+            const k = temp[i][0]; const v = temp[i][1]
+            if (!dict.hasOwnProperty(k)) dict[k] = v;
+        }
+
+        const result = fetch('http://localhost:5050/analyze/', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              macros: JSON.stringify(dict),
+              transcript: transcript,
+            })
+        })
+            .then(response => response.json())
+            .then(data => console.log(data))
+            .catch(error => console.error(error));
+    } else {
+        alert("Please enter your transcript before clicking Analyze!");
+    }
   };
   return (
     <ListItem>
@@ -61,7 +82,7 @@ export default function Form({ addTodo }) {
                     variant="filled"
                     style={{width: 800}}
                     onChange={handleChange}
-                    value={text}
+                    value={transcript}
                 />
                 <Button variant="outlined" aria-label="analyze" type="submit" className="btn_analyze">Analyze</Button>
             </>
