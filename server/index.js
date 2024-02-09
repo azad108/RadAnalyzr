@@ -70,20 +70,22 @@ const loadVectors = async (macros) => {
 
 // Find the highest ranked macro text corresponding to the macroPhrase
 // whose vector scores the highest against the vectors of existing macros
-const findTextFor = async (macroPhrase) => {
+const findHighestMatchingMacroFromDB = async (macroPhrase) => {
     try {
-        const macroVector = await computeVector(macroPhrase);
-        return new Promise((resolve, reject) => {
-            vectorDB.query(`SELECT macro_text, dot_product(vector, JSON_ARRAY_PACK(?)) as score
-                                            FROM tbl_radvector
-                            ORDER BY score DESC
-                            limit 1;
-                            `,
-                            [JSON.stringify(macroVector)],
-            (error, results) => {
-                if (error) {console.error(`Error in findTextFor query:\n`, error); reject(error);}
-                console.log(`findTextFor results:`, results);
-                resolve(results[0].RowDataPacket);
+        computeVector(macroPhrase)
+        .then((macroVector) => {
+            return new Promise((resolve, reject) => {
+                vectorDB.query(`SELECT macro_text, dot_product(vector, JSON_ARRAY_PACK(?)) as score
+                                                FROM tbl_radvector
+                                ORDER BY score DESC
+                                limit 1;
+                                `,
+                                [JSON.stringify(macroVector)],
+                (error, results) => {
+                    if (error) {reject(error);}
+                    console.log(`findHighestMatchingMacroFromDB results:`, results);
+                    resolve(results[0].RowDataPacket);
+                });
             });
         });
     }
@@ -118,7 +120,7 @@ const analyzeTranscript = async (transcript) => {
     }
 }
 
-
+// take the return value of analyzeTranscript and return it as a list of characters
 const sliceAnalyzed = async (analyzedTranscript) => {
     try {
         const analyzedTranscript = await analyzeTranscript(transcript);
@@ -131,57 +133,53 @@ const sliceAnalyzed = async (analyzedTranscript) => {
     }
 }
 
-const refillNewTranscriptWithMacroTexts = async (newTranscript, macroData) => {
+// replace all the placeholder macroPhrases in the script with their corresponding macroTexts
+const refillNewTranscriptWithMacroTexts = (newTranscript, macroData) => {
     // find score for each macroPhrase in macroData and add it to the newTranscript if it has score > 90 (ie high confidence)
     // change newTranscript[index] to the string contained from macro_text
     try {
-            return new Promise((resolve, reject) => {
+        macroData.forEach(async ([index, macroPhrase]) => {
                 newTranscript = JSON.parse(JSON.stringify(newTranscript));
-                macroData.map(async ([index, macroPhrase]) => {
-                    console.log(index, " ", macroPhrase)
-                    if (macroPhrase.length > 0) {
-                        
-                        const response = findTextFor(macroPhrase);
-                        if (response) {
-                            if (response.score > 0.9) {
-                                console.log("macro_response, "+response)
-                                const macroText = response.macro_text;
-                                newTranscript[index] = macroText;
-                            } else {
-                                const thisPhrase = macroPhrase + ".";
-                                newTranscript[index] = thisPhrase;
-                            }
-                            resolve(newTranscript);
+            
+                console.log(index, " ", macroPhrase)
+                if (macroPhrase.length > 0) {
+                    findHighestMatchingMacroFromDB(macroPhrase)
+                    .then((response) => {
+                        if (response && response.score > 0.9) {
+                            console.log("macro_response, "+response)
+                            const macroText = response.macro_text;
+                            newTranscript[index] = macroText;
                         } else {
-                            reject("findTextFor failed to respond!");
-                        }
-                        
-                }});
-            });
-        
+                            console.log("macro_response_else")
+                            const thisPhrase = macroPhrase + ".";
+                            [...newTranscript][index] = thisPhrase;
+                        }});
+                        return newTranscript;
+            }});
     } catch (err) {
         console.log(`Error encountered while inside refillNewTranscriptWithMacroTexts:\n`, err);
         throw(err);
     }    
-
 }
+
+
+// remove the // literals and replace their following macroPhrases with corresponding macroTexts 
 const enhanceTranscript = async (transcript) => {
     try {
         const result = await sliceAnalyzed(transcript) 
+        if (!result) return transcript.split(''); 
         let newTranscript = [];
         let i = 0;        
-        // stack of all phrases_texts to update in array
+        // stack of all macro_texts to update in array
         const macroData = []
         while(i < result.length) {
             // what to do if '//' is encountered in the transcript result
             if (result[i] === '/' && i+1 < result.length && result[i+1] === '/' && i++ && i++) {
-                console.log(i, "// encountered", result[i]);
                 // iterate through transcript to find the first fullstop signalling end of current sentence.
                 let firstChar = false;
                 // this_phrase will be the command context if it exists
                 let this_phrase = "";
                 while (i < result.length && result[i] !== '.') {
-                    console.log(i, " ====inside phrasing==== ",result[i]);
                     // it's not the first character after the // and the first letter of the macro phrase
                     if (!firstChar && /\s/.test(result[i]) && i+1 < result.length) {
                         i++;
@@ -191,18 +189,18 @@ const enhanceTranscript = async (transcript) => {
                         i++;
                     }
                 }
-                console.log(this_phrase)
                 // macroData[i][0] -> the index where to put the macro text 
                 // macroData[i][1] -> this_phrase
                 macroData.push([newTranscript.length, this_phrase]);
             } else {
-                console.log(i, " ============== ",result[i])
                 newTranscript.push(result[i]);
             }
             i++;
         }
-        
-        return await refillNewTranscriptWithMacroTexts(newTranscript, macroData)
+        console.log("enhanceeee")
+        console.log(newTranscript);
+        console.log(macroData)
+        return await refillNewTranscriptWithMacroTexts(newTranscript, macroData);
     } catch (err) {
         console.log(`Error encountered while enhancing transcript:\n`, err);
         throw err;
@@ -215,9 +213,20 @@ app.post('/analyze', async (req, res, next) => {
         macros = JSON.parse(req.body.macros);
         // uncomment when the xlsx file being sent is updated to update DB instance
         //loadVectors(macros);
-        const finalTranscript = await enhanceTranscript(transcript);
-        console.log(finalTranscript.flat().join(''))
-        res.json(finalTranscript.join(''));
+        // enhanceTranscript(transcript)
+        // .then((finalTranscript) => {
+        //     if (finalTranscript) {
+        //     console.log(finalTranscript.flat())
+        //     res.json(finalTranscript);
+        //     }
+        // });
+
+        //Uncomment to get only the text in // literals
+        const finalTranscript = await sliceAnalyzed(transcript)
+        if (finalTranscript) {
+            console.log(finalTranscript.flat().join(''))
+            res.json(finalTranscript.flat().join(''));
+        }
     } catch (error) {
         next(error);
     }
