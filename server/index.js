@@ -135,24 +135,30 @@ const refillNewTranscriptWithMacroTexts = async (newTranscript, macroData) => {
     // find score for each macroPhrase in macroData and add it to the newTranscript if it has score > 90 (ie high confidence)
     // change newTranscript[index] to the string contained from macro_text
     try {
-        // Use Promise.all to wait for all promises to resolve
-        return Promise.all(macroData.map(async ([index, macroPhrase]) => {
-            console.log(index, " ", macroPhrase)
-            if (macroPhrase.length > 0) {
-                const response = await findTextFor(macroPhrase);
-                console.log("macro_response, "+response)
-                if (response) {
-                    if (response.score > 0.9) {
-                        const macroText = response.macro_text;
-                        newTranscript[index] = macroText;
-                    } else {
-                        const thisPhrase = macroPhrase + ".";
-                        newTranscript[index] = thisPhrase;
-                    }
-                }
-                return newTranscript;
-            }
-        }));
+            return new Promise((resolve, reject) => {
+                newTranscript = JSON.parse(JSON.stringify(newTranscript));
+                macroData.map(async ([index, macroPhrase]) => {
+                    console.log(index, " ", macroPhrase)
+                    if (macroPhrase.length > 0) {
+                        
+                        const response = findTextFor(macroPhrase);
+                        if (response) {
+                            if (response.score > 0.9) {
+                                console.log("macro_response, "+response)
+                                const macroText = response.macro_text;
+                                newTranscript[index] = macroText;
+                            } else {
+                                const thisPhrase = macroPhrase + ".";
+                                newTranscript[index] = thisPhrase;
+                            }
+                            resolve(newTranscript);
+                        } else {
+                            reject("findTextFor failed to respond!");
+                        }
+                        
+                }});
+            });
+        
     } catch (err) {
         console.log(`Error encountered while inside refillNewTranscriptWithMacroTexts:\n`, err);
         throw(err);
@@ -196,7 +202,7 @@ const enhanceTranscript = async (transcript) => {
             i++;
         }
         
-        return await refillNewTranscriptWithMacroTexts(newTranscript, macroData);
+        return await refillNewTranscriptWithMacroTexts(newTranscript, macroData)
     } catch (err) {
         console.log(`Error encountered while enhancing transcript:\n`, err);
         throw err;
@@ -210,7 +216,7 @@ app.post('/analyze', async (req, res, next) => {
         // uncomment when the xlsx file being sent is updated to update DB instance
         //loadVectors(macros);
         const finalTranscript = await enhanceTranscript(transcript);
-        console.log(finalTranscript.join())
+        console.log(finalTranscript.flat().join(''))
         res.json(finalTranscript.join(''));
     } catch (error) {
         next(error);
