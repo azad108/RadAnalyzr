@@ -1,5 +1,5 @@
 {
-    "model": "gpt-3.5-turbo-0125",
+    "model": "gpt-4-0613",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
       {"role": "user", "content": "Analyze the following transcript. For the analysis, Find the words between commands like insert, input, embed, enter, fill, etc and fullstop in a sentence. Replace the command and the spaces after it with `//` 'Clinical History: Abdominal pain and left lower quadrant pain. 100 mL of Omnipaque 350 IVcontrast was administered. Comparison: 12/13/2023. There is minimal bibasilar atelectasis. There are multiple splenic calcifications consistent with remote granulomatous disease. There are subcentimeter hypodensities in the bilateral kidneys, which are too small to characterize, but statistically represent renal cysts. There is a 3.5x2.5 cm hemangioma within the liver, which is benign and incidental. Insert diverticulitis moderate. There is moderate pericolonic inflammatory stranding. Moderate diverticulosis is present in the sigmoid and descending colon.'"},
@@ -24,6 +24,5 @@
           "required": ["modified_text"]
         }
       }
-    ],
-    "response_format": { "type": "json_object" }
+    ]
 }

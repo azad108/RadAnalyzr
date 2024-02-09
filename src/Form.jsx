@@ -10,6 +10,7 @@ export default function Form({ addTodo }) {
   const [transcript, setTranscript] = useState("");
   const [radData, setRadData] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [output, setOutput] = useState("");
 
   const loadData = (e) => {
     const reader = new FileReader()
@@ -60,7 +61,7 @@ export default function Form({ addTodo }) {
               transcript: transcript,
             })
         })
-            .then(data => console.log(data.body))
+            .then(data => (setOutput(data.body)))
             .catch(error => console.error(error));
     } else {
         alert("Please enter your transcript before clicking Analyze!");
@@ -86,7 +87,7 @@ export default function Form({ addTodo }) {
                 <Button variant="outlined" aria-label="analyze" type="submit" className="btn_analyze">Analyze</Button>
             </>
         }
-         
+        {(output.length > 0) && <><h3>Your Processed Transcript:</h3> <p>{output}</p> </>}
       </form>
     </ListItem>
   );

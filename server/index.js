@@ -29,6 +29,13 @@ app.get('/', (req, res) => {
     res.send("Hello World!");
 });
 
+// Custom error handling middleware 
+app.use((err, req, res, next) => { 
+    console.error(err.stack); 
+    res.status(500).json( 
+        { message: 'Something went wrong in the server!' }); 
+}); 
+
 // return the vector of a given string using OpenAI Embeddings API
 const computeVector = async (str) => {
     const embedding = await openai.embeddings.create({
@@ -53,18 +60,20 @@ const loadVectors = async (macros) => {
                     (error, results) => {
                         if (error) throw error;
                     });
-                });
+                })
+                .catch((err) => {throw err});
         } catch (error) {
-            console.error(`Error computing vector for ${macroPhrase}\n`, error);
+            console.error(`Error while computing vector for ${macroPhrase}\n`, error);
         }
     }
 }
 
-// Find the macro text corresponding to the macroPhrase if ranks high against the existing macros
-const findText = async (macroPhrase) => {
-    computeVector(macroPhrase)
-        .then((macroVector) => {
-            const vectorJSON = JSON.stringify(macroVector);
+// Find the highest ranked macro text corresponding to the macroPhrase
+// whose vector scores the highest against the vectors of existing macros
+const findTextFor = async (macroPhrase) => {
+    try {
+        const macroVector = await computeVector(macroPhrase);
+        if (macroVector) {
             vectorDB.query(`SELECT macro_text, dot_product(vector, JSON_ARRAY_PACK(?)) as score
                                             FROM tbl_radvector
                             ORDER BY score DESC
@@ -73,48 +82,107 @@ const findText = async (macroPhrase) => {
                             [JSON.stringify(macroVector)],
             (error, results) => {
                 if (error) throw error;
-                return results;
+                return results[0].RowDataPacket;
             });
-        });
+        }
+    }
+    catch (err){
+        console.log(`Error encountered while finding macro text for ${macroPhrase}.\n`, err);
+    }
 }
 
 // use the function calling tool of OpenAI ChatCompletions API to analyze transcript 
 // and return a templated version (//) of it by replacing commands such as `insert, input, embed, enter, fill, etc`
 // Assumption: the text contains some words after a macro command and the command sentence is ended with a fullstop 
 const analyzeTranscript = async (transcript) => {
-    newPrompt = {
-        role: "user",
-        content: `Analyze the following transcript:'${transcript}'`
-    }
-    let messages = JSON.parse(JSON.stringify(functionModel.messages));
-    messages.push(newPrompt);
-    openai.chat.completions.create({
-        "model": functionModel.model,
-        "functions": functionModel.functions,
-        "messages": JSON.parse(JSON.stringify(messages)),
-        "response_format": { "type": "json_object" }
-    }
-        )
-        .then((data) => {
-            return JSON.parse(data.choices[0].message.function_call.arguments).modified_text;
+    try {
+        newPrompt = {
+            role: "user",
+            content: `Analyze the following transcript:'${transcript}'`
+        }
+        let messages = JSON.parse(JSON.stringify(functionModel.messages));
+        messages.push(newPrompt);
+        const response = await openai.chat.completions.create({
+            "model": functionModel.model,
+            "functions": functionModel.functions,
+            "messages": JSON.parse(JSON.stringify(messages))
         });
+        const modifiedText = JSON.parse(response.choices[0].message.function_call.arguments).modified_text;
+        return modifiedText;
+            
+    } catch (err) {
+        console.log(`Error encountered while analyzing transcript:\n${transcript}\n`, err)
+    }
 }
 
-app.post('/analyze', (req, res) => {
+const enhanceTranscript = async (transcript) => {
+    try {
+        const analyzedTranscript = await analyzeTranscript(transcript);
+        if (analyzedTranscript) {
+            const result = analyzedTranscript.split('');
+            let newTranscript = [];
+            let i = 0;
+            console.log('print from ENHANCE!')
+            console.log('analyzedTranscript:', analyzedTranscript);
+            
+            while(i < result.length) {
+                // what to do if '//' is encountered in the transcript result
+                if (result[i] === '/' && i+1 < result.length && result[i+1] === '/' && i++ && i++) {
+                    console.log(i, "// encountered", result[i]);
+                    // iterate through transcript to find the first fullstop signalling end of current sentence.
+                    let firstChar = false;
+                    // this_phrase will be the command context if it exists
+                    let this_phrase = "";
+                    while (i < result.length && result[i] !== '.') {
+                        console.log(i, " ====inside phrasing==== ",result[i]);
+                        // it's not the first character after the // and the first letter of the macro phrase
+                        if (!firstChar && /\s/.test(result[i]) && i+1 < result.length) {
+                            i++;
+                        } else {
+                            firstChar = true;
+                            this_phrase += result[i];
+                            i++;
+                        }
+                    }
+                    console.log(this_phrase)
+                    // find score for this_phrase and add it to the newTranscript if it has score > 90 (ie high confidence)
+                    if (this_phrase.length > 0) {
+                        findTextFor(this_phrase)
+                        .then((response) => {
+                            if (response) {
+                                console.log("macro_response, "+response)
+                                if (response.score > 0.9) {
+                                    newTranscript.push(response.macro_text);
+                                } else {
+                                    newTranscript.push(this_phrase + ".");
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    console.log(i, " ============== ",result[i])
+                    newTranscript.push(result[i]);
+                }
+                i++;
+            }
+            console.log(newTranscript);
+            return newTranscript;
+        }
+    } catch (err) {
+        console.log(`Error encountered while enhancing transcript:\n`, err)
+    }
+}
+
+app.post('/analyze', async (req, res, next) => {
     try {
         transcript = req.body.transcript;
         macros = JSON.parse(req.body.macros);
-        // uncomment when the xlsx file being sent is updated
+        // uncomment when the xlsx file being sent is updated to update DB instance
         //loadVectors(macros);
-        //findText("diverticulitis moderate");
-        
-        analyzeTranscript(transcript)
-            .then((analyzedTranscript) => {
-                console.log(analyzedTranscript);
-                res.json(analyzedTranscript);
-            });
-    } catch {
-        throw("Unable to process POST request to /analyze");
+        const finalTranscript = await enhanceTranscript(transcript);
+        res.json(finalTranscript.join());
+    } catch (error) {
+        next(error);
     }
 });
 
