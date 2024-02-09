@@ -60,8 +60,7 @@ export default function Form({ addTodo }) {
               transcript: transcript,
             })
         })
-            .then(response => response.json())
-            .then(data => console.log(data))
+            .then(data => console.log(data.body))
             .catch(error => console.error(error));
     } else {
         alert("Please enter your transcript before clicking Analyze!");
@@ -87,7 +86,7 @@ export default function Form({ addTodo }) {
                 <Button variant="outlined" aria-label="analyze" type="submit" className="btn_analyze">Analyze</Button>
             </>
         }
-            
+         
       </form>
     </ListItem>
   );

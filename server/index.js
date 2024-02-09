@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const OpenAI = require("openai");
 const dotenv = require('dotenv')
 dotenv.config()
+const functionModel = require('./function-model.json');
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
@@ -59,7 +60,7 @@ const loadVectors = async (macros) => {
     }
 }
 
-// 
+// Find the macro text corresponding to the macroPhrase if ranks high against the existing macros
 const findText = async (macroPhrase) => {
     computeVector(macroPhrase)
         .then((macroVector) => {
@@ -72,9 +73,30 @@ const findText = async (macroPhrase) => {
                             [JSON.stringify(macroVector)],
             (error, results) => {
                 if (error) throw error;
-                console.log(results)
                 return results;
             });
+        });
+}
+
+// use the function calling tool of OpenAI ChatCompletions API to analyze transcript 
+// and return a templated version (//) of it by replacing commands such as `insert, input, embed, enter, fill, etc`
+// Assumption: the text contains some words after a macro command and the command sentence is ended with a fullstop 
+const analyzeTranscript = async (transcript) => {
+    newPrompt = {
+        role: "user",
+        content: `Analyze the following transcript:'${transcript}'`
+    }
+    let messages = JSON.parse(JSON.stringify(functionModel.messages));
+    messages.push(newPrompt);
+    openai.chat.completions.create({
+        "model": functionModel.model,
+        "functions": functionModel.functions,
+        "messages": JSON.parse(JSON.stringify(messages)),
+        "response_format": { "type": "json_object" }
+    }
+        )
+        .then((data) => {
+            return JSON.parse(data.choices[0].message.function_call.arguments).modified_text;
         });
 }
 
@@ -82,14 +104,21 @@ app.post('/analyze', (req, res) => {
     try {
         transcript = req.body.transcript;
         macros = JSON.parse(req.body.macros);
-        loadVectors(macros);
-        findText("diverticulitis moderate");
+        // uncomment when the xlsx file being sent is updated
+        //loadVectors(macros);
+        //findText("diverticulitis moderate");
+        
+        analyzeTranscript(transcript)
+            .then((analyzedTranscript) => {
+                console.log(analyzedTranscript);
+                res.json(analyzedTranscript);
+            });
     } catch {
         throw("Unable to process POST request to /analyze");
     }
 });
 
-const port = process.env.PORT || 5050;
+const port = process.env.PORT || 5050; 
 app.listen(port, () =>
   console.log(`RadAnalyzr server listening on port: ${port}!`),
 );
