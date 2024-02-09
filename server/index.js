@@ -52,7 +52,6 @@ const loadVectors = async (macros) => {
         try {
             computeVector(macroPhrase)
                 .then((macroVector) => {
-                    const vectorJSON = JSON.stringify(macroVector);
                     vectorDB.query(`INSERT IGNORE INTO tbl_radvector (macro_phrase, macro_text, vector)
                                     VALUES (?, ?, JSON_ARRAY_PACK(?));
                                     `,
@@ -82,6 +81,7 @@ const findTextFor = async (macroPhrase) => {
                             [JSON.stringify(macroVector)],
             (error, results) => {
                 if (error) throw error;
+                console.log(results);
                 return results[0].RowDataPacket;
             });
         }
@@ -115,61 +115,89 @@ const analyzeTranscript = async (transcript) => {
     }
 }
 
-const enhanceTranscript = async (transcript) => {
+
+const sliceAnalyzed = async (analyzedTranscript) => {
     try {
         const analyzedTranscript = await analyzeTranscript(transcript);
         if (analyzedTranscript) {
-            const result = analyzedTranscript.split('');
-            let newTranscript = [];
-            let i = 0;
-            console.log('print from ENHANCE!')
-            console.log('analyzedTranscript:', analyzedTranscript);
-            
-            while(i < result.length) {
-                // what to do if '//' is encountered in the transcript result
-                if (result[i] === '/' && i+1 < result.length && result[i+1] === '/' && i++ && i++) {
-                    console.log(i, "// encountered", result[i]);
-                    // iterate through transcript to find the first fullstop signalling end of current sentence.
-                    let firstChar = false;
-                    // this_phrase will be the command context if it exists
-                    let this_phrase = "";
-                    while (i < result.length && result[i] !== '.') {
-                        console.log(i, " ====inside phrasing==== ",result[i]);
-                        // it's not the first character after the // and the first letter of the macro phrase
-                        if (!firstChar && /\s/.test(result[i]) && i+1 < result.length) {
-                            i++;
-                        } else {
-                            firstChar = true;
-                            this_phrase += result[i];
-                            i++;
-                        }
-                    }
-                    console.log(this_phrase)
-                    // find score for this_phrase and add it to the newTranscript if it has score > 90 (ie high confidence)
-                    if (this_phrase.length > 0) {
-                        findTextFor(this_phrase)
-                        .then((response) => {
-                            if (response) {
-                                console.log("macro_response, "+response)
-                                if (response.score > 0.9) {
-                                    newTranscript.push(response.macro_text);
-                                } else {
-                                    newTranscript.push(this_phrase + ".");
-                                }
-                            }
-                        });
-                    }
-                } else {
-                    console.log(i, " ============== ",result[i])
-                    newTranscript.push(result[i]);
-                }
-                i++;
-            }
-            console.log(newTranscript);
-            return newTranscript;
+            return analyzedTranscript.split('');
         }
     } catch (err) {
-        console.log(`Error encountered while enhancing transcript:\n`, err)
+        console.log(`Error encountered while slicing analyzed transcript:\n`, err)
+    }
+}
+
+const refillNewTranscriptWithMacroTexts = async (newTranscript, macroData) => {
+    // find score for each macroPhrase in macroData and add it to the newTranscript if it has score > 90 (ie high confidence)
+    // change newTranscript[index] to the string contained from macro_text
+    try {
+        for ([index, macroPhrase] of macroData) {
+            console.log(index, " ", macroPhrase)
+            if (macroPhrase.length > 0) {
+                const response = await findTextFor(macroPhrase);
+                if (response) {
+                    console.log("macro_response, "+response)
+                    if (response.score > 0.9) {
+                        const macroText = response.macro_text;
+                        newTranscript[index] = macroText;
+                    } else {
+                        const thisPhrase = macroPhrase + ".";
+                        newTranscript[index] = thisPhrase;
+                    }
+                    console.log("from refillNewTranscriptWithMacroTexts: \n" , newTranscript)
+                    return newTranscript;
+                }
+            }
+        }
+    } catch (err) {
+        console.log(`Error encountered while inside refillNewTranscriptWithMacroTexts:\n`, err);
+    }    
+
+}
+const enhanceTranscript = async (transcript) => {
+    try {
+        const result = await sliceAnalyzed(transcript) 
+        let newTranscript = [];
+        let i = 0;
+        console.log('print from ENHANCE!')
+        console.log('analyzedTranscript:', result);
+        
+        // stack of all phrases_texts to update in array
+        const macroData = []
+        while(i < result.length) {
+            // what to do if '//' is encountered in the transcript result
+            if (result[i] === '/' && i+1 < result.length && result[i+1] === '/' && i++ && i++) {
+                console.log(i, "// encountered", result[i]);
+                // iterate through transcript to find the first fullstop signalling end of current sentence.
+                let firstChar = false;
+                // this_phrase will be the command context if it exists
+                let this_phrase = "";
+                while (i < result.length && result[i] !== '.') {
+                    console.log(i, " ====inside phrasing==== ",result[i]);
+                    // it's not the first character after the // and the first letter of the macro phrase
+                    if (!firstChar && /\s/.test(result[i]) && i+1 < result.length) {
+                        i++;
+                    } else {
+                        firstChar = true;
+                        this_phrase += result[i];
+                        i++;
+                    }
+                }
+                console.log(this_phrase)
+                // macroData[i][0] -> the index where to put the macro text 
+                // macroData[i][1] -> this_phrase
+                macroData.push([newTranscript.length, this_phrase]);
+            } else {
+                console.log(i, " ============== ",result[i])
+                newTranscript.push(result[i]);
+            }
+            i++;
+        }
+        const response = await refillNewTranscriptWithMacroTexts(newTranscript, macroData);
+        console.log(response);
+        return response;
+    } catch (err) {
+        console.log(`Error encountered while enhancing transcript:\n`, err);
     }
 }
 
@@ -180,7 +208,7 @@ app.post('/analyze', async (req, res, next) => {
         // uncomment when the xlsx file being sent is updated to update DB instance
         //loadVectors(macros);
         const finalTranscript = await enhanceTranscript(transcript);
-        res.json(finalTranscript.join());
+        res.json(finalTranscript);
     } catch (error) {
         next(error);
     }
