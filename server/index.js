@@ -63,6 +63,7 @@ const loadVectors = async (macros) => {
                 .catch((err) => {throw err});
         } catch (error) {
             console.error(`Error while computing vector for ${macroPhrase}\n`, error);
+            throw(err);
         }
     }
 }
@@ -72,7 +73,7 @@ const loadVectors = async (macros) => {
 const findTextFor = async (macroPhrase) => {
     try {
         const macroVector = await computeVector(macroPhrase);
-        if (macroVector) {
+        return new Promise((resolve, reject) => {
             vectorDB.query(`SELECT macro_text, dot_product(vector, JSON_ARRAY_PACK(?)) as score
                                             FROM tbl_radvector
                             ORDER BY score DESC
@@ -80,14 +81,15 @@ const findTextFor = async (macroPhrase) => {
                             `,
                             [JSON.stringify(macroVector)],
             (error, results) => {
-                if (error) throw error;
-                console.log(results);
-                return results[0].RowDataPacket;
+                if (error) {console.error(`Error in findTextFor query:\n`, error); reject(error);}
+                console.log(`findTextFor results:`, results);
+                resolve(results[0].RowDataPacket);
             });
-        }
+        });
     }
     catch (err){
         console.log(`Error encountered while finding macro text for ${macroPhrase}.\n`, err);
+        throw(err);
     }
 }
 
@@ -112,6 +114,7 @@ const analyzeTranscript = async (transcript) => {
             
     } catch (err) {
         console.log(`Error encountered while analyzing transcript:\n${transcript}\n`, err)
+        throw(err);
     }
 }
 
@@ -124,6 +127,7 @@ const sliceAnalyzed = async (analyzedTranscript) => {
         }
     } catch (err) {
         console.log(`Error encountered while slicing analyzed transcript:\n`, err)
+        throw(err);
     }
 }
 
@@ -131,12 +135,13 @@ const refillNewTranscriptWithMacroTexts = async (newTranscript, macroData) => {
     // find score for each macroPhrase in macroData and add it to the newTranscript if it has score > 90 (ie high confidence)
     // change newTranscript[index] to the string contained from macro_text
     try {
-        for ([index, macroPhrase] of macroData) {
+        // Use Promise.all to wait for all promises to resolve
+        return Promise.all(macroData.map(async ([index, macroPhrase]) => {
             console.log(index, " ", macroPhrase)
             if (macroPhrase.length > 0) {
                 const response = await findTextFor(macroPhrase);
+                console.log("macro_response, "+response)
                 if (response) {
-                    console.log("macro_response, "+response)
                     if (response.score > 0.9) {
                         const macroText = response.macro_text;
                         newTranscript[index] = macroText;
@@ -144,13 +149,13 @@ const refillNewTranscriptWithMacroTexts = async (newTranscript, macroData) => {
                         const thisPhrase = macroPhrase + ".";
                         newTranscript[index] = thisPhrase;
                     }
-                    console.log("from refillNewTranscriptWithMacroTexts: \n" , newTranscript)
-                    return newTranscript;
                 }
+                return newTranscript;
             }
-        }
+        }));
     } catch (err) {
         console.log(`Error encountered while inside refillNewTranscriptWithMacroTexts:\n`, err);
+        throw(err);
     }    
 
 }
@@ -158,10 +163,7 @@ const enhanceTranscript = async (transcript) => {
     try {
         const result = await sliceAnalyzed(transcript) 
         let newTranscript = [];
-        let i = 0;
-        console.log('print from ENHANCE!')
-        console.log('analyzedTranscript:', result);
-        
+        let i = 0;        
         // stack of all phrases_texts to update in array
         const macroData = []
         while(i < result.length) {
@@ -193,11 +195,11 @@ const enhanceTranscript = async (transcript) => {
             }
             i++;
         }
-        const response = await refillNewTranscriptWithMacroTexts(newTranscript, macroData);
-        console.log(response);
-        return response;
+        
+        return await refillNewTranscriptWithMacroTexts(newTranscript, macroData);
     } catch (err) {
         console.log(`Error encountered while enhancing transcript:\n`, err);
+        throw err;
     }
 }
 
@@ -208,7 +210,8 @@ app.post('/analyze', async (req, res, next) => {
         // uncomment when the xlsx file being sent is updated to update DB instance
         //loadVectors(macros);
         const finalTranscript = await enhanceTranscript(transcript);
-        res.json(finalTranscript);
+        console.log(finalTranscript.join())
+        res.json(finalTranscript.join(''));
     } catch (error) {
         next(error);
     }
