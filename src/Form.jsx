@@ -61,7 +61,11 @@ export default function Form({ addTodo }) {
               transcript: transcript,
             })
         })
-            .then(data => (setOutput(data.body)))
+            .then(response => response.json())
+            .then(data => {
+                (setOutput(data))
+                console.log(data)
+            })
             .catch(error => console.error(error));
     } else {
         alert("Please enter your transcript before clicking Analyze!");
